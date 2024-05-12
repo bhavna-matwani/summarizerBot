@@ -3,13 +3,12 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 8 * * 1-5'
+    - cron: '0 8 * * *'
 
 env:
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-  SLACK_CHANNEL_IDS: ${{ secrets.SLACK_CHANNEL_IDS }}
 
 jobs:
   build:
@@ -33,4 +32,4 @@ jobs:
 
       - name: run SlackGPT
         run: |
-          python slackgpt.py
+          python slackgpt.py --summarize-only

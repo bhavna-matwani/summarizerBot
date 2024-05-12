@@ -1,61 +1,65 @@
-# SlackGPT
+# Slack Channel Summarizer
 
-The SlackGPT is a Slack bot that summarizes conversations and sends you a summary per channel.
+This Python script enables a Slack app to summarize messages from specified channels using OpenAI's GPT-3.5 model. It also includes functionality to respond to real-time Slack commands and can operate in a scheduled mode to run summarizations periodically.
 
-If you want to run it locally, you can use:
+## Features
 
-```console
-python slackgpt.py
+- **Real-Time Interaction**: Responds to `/digest` command in Slack to summarize channel messages based on user preferences.
+- **Batch Summarization**: Can be scheduled to automatically summarize messages from specified channels at regular intervals using a cron job or similar scheduling mechanism.
+- **Customizable**: User and channel preferences can be stored and retrieved using a shelve database, allowing for persistent and customizable configurations.
+
+## Prerequisites
+
+Before you can run this script, you'll need:
+
+- Python 3.8+
+- Slack App with a Bot token and permissions to read channel messages and post messages.
+- An OpenAI API key with access to the GPT-3.5 model.
+
+## Setup
+
+### Environment Variables
+
+You need to set the following environment variables:
+
+- `OPENAI_API_KEY`: Your OpenAI API key.
+- `SLACK_BOT_TOKEN`: Your Slack Bot User OAuth Token (`xoxb-`).
+- `SLACK_TOKEN`: Your Slack App-Level Token (`xapp-` for Socket Mode).
+- `SLACK_WEBHOOK_URL`: Your Slack incoming webhook URL (if needed).
+
+You can set these variables in your environment or use a `.env` file and load them with `python-dotenv`.
+
+### Installing Dependencies
+
+Install the required Python packages:
+
+```bash
+pip install openai slack_bolt slack_sdk shelve
 ```
 
-Otherwise, fork the project, set up the GitHub secrets and you can leverage the GitHub action to run it automatically.
+## Configuring the Slack App
 
-## Getting Started
+1. **Create a new Slack App** in your workspace.
+2. **Add the Bot Token Scopes**: 
+   - `channels:history`
+   - `chat:write`
+   - `commands`
+3. **Install the app** to your workspace and invite it to the channels it needs access to.
 
-### Slack API
+## Usage
 
-1. Go to [Slack API page](https://api.slack.com/apps) and create a new app.
+### Running the App
 
-2. Install the app in the workspace you are interested in summarizing Slack messages.
+- **Interactive Mode (listening to Slack events):**
+  ```bash
+  python slackgpt.py
+  ```
+- **Batch Mode (Daily Summaries):**
+```bash
+python slackgpt.py --summarize-only
+```
 
-3. Get the **User OAuth Token** which exists in the **Install App** settings. This will be needed to use Slack's SDK. Set this value as the `SLACK_TOKEN` on a `.env` file if you want to run the script locally or as a GitHub secret if you want to leverage the GitHub workflow.
-
-<p align="center">
-  <img width="800" alt="Screenshot 2023-11-18 at 9 49 53 PM" src="https://github.com/DidierRLopes/slackGPT/assets/25267873/0b4bd347-ff38-40d4-9f85-c3c069680597">
-</p>
-
-4. Create a **Webhook URL** for your channel so that you can receive messages' summary. Set this value as the `SLACK_WEBHOOK_URL` on a `.env` file if you want to run the script locally or as a GitHub secret if you want to leverage the GitHub workflow.
-
-5. Depending on the type of access needed, different **User Token Scopes** need to be set. Here's the methods that we will need and the associated user token scopes.
-
-- **conversations_history**: This method retrieves a conversation's history of messages and events. It requires the **channels:history** scope for public channels, or **groups:history** for private channels and **im:history** for direct messages.
-
-- **users_info**: This method returns information about a user. It requires the **users:read** scope.
-
-- **conversations_info**: This method retrieves information about a conversation. It requires the **channels:read** scope for public channels, or **groups:read** for private channels and **im:read** for direct messages.
-
-<p align="center">
-  <img width="800" alt="Screenshot 2023-11-18 at 9 53 57 PM" src="https://github.com/DidierRLopes/slackGPT/assets/25267873/7cd4ccea-5826-4cda-8a6f-dce246308957">
-</p>
-
-
-### OpenAI API
-
-Go to [OpenAI API page](https://platform.openai.com/api-keys) to extract the API key. Set this value as the `OPENAI_API_KEY` on a `.env` file if you want to run the script locally or as a GitHub secret if you want to leverage the GitHub workflow.
-
-<p align="center">
-  <img width="800" src="https://github.com/DidierRLopes/slackGPT/assets/25267873/6ee7e1e8-df4c-4ba3-9d38-bf34c827778d">
-</p>
-
-
-### Slack channels
-
-Get the Channel IDs that you are interested in reading messages from.
-
-Set those values as the `SLACK_CHANNEL_IDS` on a `.env` file if you want to run the script locally or as a GitHub secret if you want to leverage the GitHub workflow. If you want to read from multiple channels you can set `SLACK_CHANNEL_IDS` with multiple IDs separated by commas (with no space), e.g. ABC123,DEF456,GHI789.
-
-<p align="center">
-  <img width="800" src="https://github.com/DidierRLopes/slackGPT/assets/25267873/4c68da63-370f-4f9f-b2ce-377347ce3817">
-</p>
-
-
+## Slack Commands
+```
+/digest [channel_names]: Triggers the summarization of the specified channels and posts the summaries and stores it in the db for cron job.
+```

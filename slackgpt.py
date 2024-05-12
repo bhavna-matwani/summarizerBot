@@ -1,149 +1,102 @@
+import argparse
 import os
 import json
 from openai import OpenAI
-
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
-from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+import shelve
 
-# Load environment variables
-load_dotenv()
 
 # OpenAI API
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or "REPLACE-ME"
-
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # Slack API
-SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL') or "REPLACE-ME"
-SLACK_TOKEN = os.getenv('SLACK_TOKEN') or "REPLACE-ME"
+SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
+SLACK_TOKEN = os.getenv('SLACK_TOKEN')
+SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
 
-# Slack channels ids separated by commas (no spaces), e.g. ABC123,DEF456,GHI789
-SLACK_CHANNEL_IDS = os.getenv('SLACK_CHANNEL_IDS') or "REPLACE-ME"
+app = App(token=SLACK_BOT_TOKEN)
 
+def save_channel_preferences(user_id, channel_ids):
+    """Save user's channel preferences to a shelve database."""
+    with shelve.open('channel_prefs.db') as db:
+        db[user_id] = channel_ids
+
+def get_channel_preferences(user_id):
+    """Retrieve a user's channel preferences from the shelve database."""
+    with shelve.open('channel_prefs.db') as db:
+        return db.get(user_id, [])
+
+@app.command("/digest")
+def handle_digest(ack, say, command):
+    # Acknowledge the command request
+    ack()
+    user_id = command['user_id']
+    print(user_id) 
+    channel_names = command['text'].split()
+    channel_ids = [get_channel_id(name) for name in channel_names if get_channel_id(name)]
+
+    if channel_ids:
+        # Save channel preferences if new channels are provided
+        save_channel_preferences(user_id, channel_ids)
+        summaries = summarize_channels(user_id)
+        if summaries:
+            say(summaries)
+        else:
+            say("No new messages to summarize.")
+    else:
+        say("Could not find specified channels.")
+
+
+def get_channel_id(channel_name):
+    """ Retrieve the channel ID for a given channel name from Slack. """
+    try:
+        response = app.client.conversations_list()
+        channels = response['channels']  # Access the list of channels
+        for channel in channels:
+            if channel['name'] == channel_name:
+                return channel['id']
+    except Exception as e:
+        print(f"Error fetching channel list: {e}")
+    return None
+
+def summarize_channels(user_id):
+    """ Fetch messages from the channels and summarize them using OpenAI. """
+    channel_ids = get_channel_preferences(user_id)
+    summaries = []
+    utc_now = datetime.now(timezone.utc)
+    start_of_today_utc = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for channel_id in channel_ids:
+        try:
+            result = app.client.conversations_history(
+                channel=channel_id, 
+                oldest=str(start_of_today_utc.timestamp()))
+            messages = " ".join(msg['text'] for msg in result['messages'] if 'subtype' not in msg)
+            if messages:
+                response = client.chat.completions.create(model="gpt-3.5-turbo",
+                messages=[{"role": "system", "content": "Summarize the conversation."},
+                          {"role": "user", "content": messages}],
+                max_tokens=150)
+                summary = response.choices[0].message.content.strip()
+                summaries.append(f"Summary for <#{channel_id}>: {summary}")
+        except SlackApiError as e:
+            print(f"Error retrieving messages for channel {channel_id}: {e}")
+    return "\n".join(summaries)
 
 def main():
+    parser = argparse.ArgumentParser(description='Run Slack bot and/or summarization.')
+    parser.add_argument('--summarize-only', action='store_true', help='Run summarize_channels function only')
+    args = parser.parse_args()
 
-    client = WebClient(token=SLACK_TOKEN)
+    if args.summarize_only:
+        user_id = os.getenv('SUMMARIZE_USER_ID') 
+        summarize_channels(user_id)
+    else:
+        SocketModeHandler(app, SLACK_TOKEN).start()
 
-    for channel_id in SLACK_CHANNEL_IDS.split(","):
-        # Store conversation history
-        conversation_history = []
-
-        try:
-
-            # --- Get conversation history ---
-
-            # Get the current date and time in UTC
-            current_datetime_utc = datetime.utcnow()
-
-            # Set the time to the beginning of today
-            start_of_today_utc = datetime(current_datetime_utc.year, current_datetime_utc.month, current_datetime_utc.day, 0, 0, 0)
-
-            # Get the data from the beginning of today in UTC
-            result = client.conversations_history(channel=channel_id, oldest=str(int(start_of_today_utc.timestamp())))
-
-            conversation_history = result["messages"]
-
-            # --- Parse conversation history ---
-
-            convo = ""
-            # Parse this conversation history
-            for message in conversation_history:
-                # Check if this is a user message
-                if ("type" in message and message["type"] == "message" and "subtype" not in message):
-                    # Check if there's a user associated with the message
-                    if "user" in message:
-                        # Get the user's real name from the users.info API method
-                        real_name = client.users_info(user=message['user']).get("user").get("real_name")
-                        # The 28_000 is to convert from UTC to PST (8*60*60)
-                        text = f"At {datetime.utcfromtimestamp(float(message['ts'])-28_800).strftime('%H:%M')} {real_name} "
-                        if "text" in message and message['text']:
-                            text += f"said '{message['text']}' "
-                        # Provide a link to the files uploaded by the user
-                        if "files" in message:
-                            text += "shared the following files: "
-                            for file in message["files"]:
-                                text += file['url_private'] + ","
-                            # Remove the last comma
-                            text = text[:-1]
-                        
-                        # Create the conversation from a channel
-                        convo += text + "\n"
-            
-            # --- Get channel name ---
-
-            # Call the conversations.info method with the channel ID
-            conversation_info = client.conversations_info(channel=channel_id)
-
-            # Extract the channel name from the result
-            channel_name = conversation_info["channel"]["name"]
-
-            # Print results
-            if convo:
-
-                # --- OpenAI Summarization ---
-
-                client = OpenAI(api_key=OPENAI_API_KEY)
-
-                response = client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {
-                            "role": "system", 
-                            "content": "You are an executive assistant that analyzes messages on Slack and performs a summary."
-                        },
-                        {
-                            "role": "user", 
-                            "content": f"In the channel {channel_name}, summarize the following conversation that has unfolded:\n{convo}"
-                        },
-                    ]
-                )
-                summary = response.choices[0].message.content
-
-                # --- Send Slack message with summary ---
-
-                payload = {
-                    'text': summary,
-                }
-
-                req = Request(SLACK_WEBHOOK_URL, json.dumps(payload).encode('utf-8'))
-                try:
-                    response = urlopen(req)
-                    response.read()
-                    
-                    print("SUCCESS: Message with insights sent to slack\n")
-
-                except HTTPError as e:
-                    print(f"Request failed: {e.code} {e.reason}\n")
-                    
-                except URLError as e:
-                    print(f"Server connection failed: {e.reason}\n")
-
-            else:
-
-                # --- Send Slack message saying no messages were found ---
-
-                payload = {
-                    'text': f"No messages were found in channel {channel_name}.",
-                }
-
-                req = Request(SLACK_WEBHOOK_URL, json.dumps(payload).encode('utf-8'))
-                try:
-                    response = urlopen(req)
-                    response.read()
-                    
-                    print("SUCCESS: Message with insights sent to slack\n")
-
-                except HTTPError as e:
-                    print(f"Request failed: {e.code} {e.reason}\n")
-                    
-                except URLError as e:
-                    print(f"Server connection failed: {e.reason}\n")
-
-        except SlackApiError as e:
-            print(f"Error creating conversation: {e}")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+
